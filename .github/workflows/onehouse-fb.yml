@@ -1,0 +1,72 @@
+name: build-images
+
+on:
+  workflow_call:
+    inputs:
+      tags:
+        required: true
+        type: string
+    secrets:
+      CI_PAT:
+        required: true
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_KEY:
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if image tags is empty
+        if: inputs.tags == ''
+        run: exit 1
+      - name: Checkout self
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+          token: ${{ secrets.CI_PAT }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::194159489498:role/GithubActionsInstallHudiForGatewayC-RepositoryRole-182NI133SRXP0
+          role-session-name: HudiInstallSession
+          role-duration-seconds: 900
+      - name: Set Code Artifact Auth Token
+        run: echo "CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token --domain onehouse --domain-owner 194159489498 --query authorizationToken --output text)" >> $GITHUB_ENV
+      - name: Set up JDK 8
+        uses: actions/setup-java@v3
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          architecture: x64
+          server-id: codeartifact
+          server-username: AWS
+          server-password: CODEARTIFACT_AUTH_TOKEN
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+      - name: Build app
+        run: ./gradlew shadowJar --warning-mode none
+      - name: Set AWS SDK Version
+        run: >-
+          echo "AWS_SDK_VERSION=$(cat build.gradle | grep "awsSdk: '" | awk -F"'" '{print $2}')" >> $GITHUB_ENV
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.3.0
+      - name: Login to DockerHub
+        run: docker login --username ${{ secrets.DOCKER_USERNAME }} --password ${{ secrets.DOCKER_KEY }}
+      #########################
+      # Docker build&tag&push #
+      #########################
+      - name: Build dataplane docker image
+        run: docker build --platform linux/amd64 -t onehouse-spark --build-arg ONEHOUSE_DATAPLANE_JAR=dataplane/build/libs/dataplane-1.0-SNAPSHOT-all.jar --build-arg HUDI_LOG_CONFIG=ds-log4j.properties --build-arg HUDI_LOG_CONFIG_DEBUG=ds-log4j-debug.properties --build-arg AWS_SDK_VERSION=$AWS_SDK_VERSION .
+      - name: Tag and push image
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+        run: |
+          for input_tag in ${{ inputs.tags }}; do
+            docker tag onehouse-spark:latest onehouse/onehouse-spark:$input_tag
+            docker push onehouse/onehouse-spark:$input_tag
+            cosign sign --key env://COSIGN_PRIVATE_KEY onehouse/onehouse-spark:$input_tag -y
+          done
