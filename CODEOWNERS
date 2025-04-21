@@ -95,7 +95,8 @@
 /plugins/custom_calyptia/       @pwhelan
 /plugins/in_calyptia_fleet/     @pwhelan
 
+
 # Build files
 **/pom.xml  @onehouseinc/dependency-change-reviewers
 **/build.gradle @onehouseinc/dependency-change-reviewers
-# Adding timestamp Mon Apr 21 14:21:20 IST 2025
+**/Dockerfile* @onehouseinc/core-infra
